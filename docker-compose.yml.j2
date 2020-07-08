@@ -1,0 +1,118 @@
+version: '3'
+
+services:
+  traefik:
+    image: traefik:v2.2
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - web
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/traefik.yml:ro
+      - ./acme.json:/acme.json
+      {%- if os == "linux" %}
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+      {%- endif %}
+    labels:
+      - "traefik.enable=true"
+      
+      - "traefik.http.routers.traefik.entrypoints=http"
+      - "traefik.http.routers.traefik.rule=Host(`{{ url_traefik }}`) && (PathPrefix(`/traefik`) || PathPrefix(`/api`))"
+      
+      - "traefik.http.middlewares.traefik-stripprefix.stripprefix.prefixes=/traefik"
+      - "traefik.http.middlewares.traefik-https-redirect.redirectscheme.scheme=https"
+      
+      - "traefik.http.routers.traefik.middlewares=traefik-https-redirect,traefik-stripprefix"
+      - "traefik.http.routers.traefik-secure.entrypoints=https"
+      - "traefik.http.routers.traefik-secure.rule=Host(`{{ url_traefik }}`) && (PathPrefix(`/traefik`) || PathPrefix(`/api`))"
+      
+      - "traefik.http.middlewares.tls-rep.redirectregex.permanent=true"
+      - "traefik.http.middlewares.tls-header.headers.SSLRedirect=true"
+      - "traefik.http.middlewares.tls-header.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.tls-header.headers.STSSeconds=315360000"
+      - "traefik.http.middlewares.tls-header.headers.STSIncludeSubdomains=true"
+      - "traefik.http.middlewares.tls-header.headers.STSPreload=true"
+      - "traefik.http.middlewares.tls-header.headers.browserXSSFilter=true"
+      - "traefik.http.middlewares.tls-header.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.tls-header.headers.frameDeny=true"
+      - "traefik.http.middlewares.tls-header.headers.customFrameOptionsValue=SAMEORIGIN"
+      - "traefik.http.middlewares.tls-header.headers.featurePolicy=accelerometer 'none'; ambient-light-sensor 'none'; camera 'none'; geolocation 'none'; gyroscope 'none'; magnetometer 'none'; microphone 'none'; usb 'none'; midi 'none'; sync-xhr 'none'; vr 'none'"
+      - "traefik.http.middlewares.tls-header.headers.referrerPolicy=strict-origin-when-cross-origin"
+
+      - "traefik.http.middlewares.tls-chain.chain.middlewares=tls-rep,tls-header"
+
+      - "traefik.http.routers.traefik-secure.middlewares=traefik-stripprefix,tls-chain"
+      - "traefik.http.routers.traefik-secure.tls=true"
+      - "traefik.http.routers.traefik-secure.tls.certresolver=http"
+      - "traefik.http.routers.traefik-secure.service=api@internal"
+
+  gitea:
+    {%- if arch == "arm" %}
+    build:
+      context: ./gitea
+      dockerfile: ./Dockerfile
+    {%- else %}
+    image: gitea/gitea:1.11
+    {%- endif %}
+    restart: unless-stopped
+    container_name: gitea
+    volumes:
+      - gitea:/data
+      {%- if os == "linux" %}
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+      {%- endif %}
+    env_file:
+      - gitea.env
+    depends_on:
+      - postgres
+    ports:
+      - "127.0.0.1:2222:22"
+    networks:
+      - web
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.entrypoints=http"
+      - "traefik.http.routers.gitea.rule=Host(`{{ url_gitea }}`)"
+      - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.gitea.middlewares=https-redirect"
+      - "traefik.http.routers.gitea-secure.entrypoints=https"
+      - "traefik.http.routers.gitea-secure.rule=Host(`{{ url_gitea }}`)"
+      - "traefik.http.routers.gitea-secure.middlewares=tls-chain"
+      - "traefik.http.routers.gitea-secure.tls=true"
+      - "traefik.http.routers.gitea-secure.tls.certresolver=http"
+      - "traefik.http.routers.gitea-secure.service=gitea"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+      - "traefik.docker.network=web"
+
+  postgres:
+    image: postgres:12.1-alpine
+    restart: unless-stopped
+    container_name: postgres
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      {%- if os == "linux" %}
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+      {%- endif %}
+    env_file:
+      - postgres.env
+    networks:
+      - internal
+
+networks:
+  internal:
+  web:
+    external: true
+
+volumes:
+  postgres:
+  gitea:
